@@ -1,140 +1,109 @@
-# 📡 Configurador Automático Datacom DM986 (Unified)
+# Configurador Automático Datacom DM986
 
-## 🚀 Descripción
+Aplicación interna en Python + Selenium para automatizar la configuración de ONUs/routers Datacom DM986.
 
-El **Configurador Automático Datacom DM986** es una herramienta profesional desarrollada en **Python** que automatiza por completo la configuración de módems **Datacom DM986**, actualmente soportando los modelos:
+## Modelos soportados
 
-- **DM986-416 AX30**
-- **DM986-414**
-- **DM986-414Q**
+- DM986-416 AX30
+- DM986-414
+- DM986-414 Q
 
-La aplicación utiliza **Selenium** para interactuar directamente con la interfaz web del módem y una **interfaz gráfica en Tkinter** que permite ejecutar todo el proceso de configuración de forma simple, segura y repetible.
+El AX30 incluye validación paso a paso de VLAN, Wi-Fi, seguridad, contraseña de administrador, TR-069 y Remote Access HTTPS. Los modelos 414 y 414 Q continúan con sus flujos actuales y se irán llevando al mismo esquema de validación durante las pruebas con equipos físicos.
 
-El objetivo principal es **eliminar la configuración manual**, reducir errores humanos y acelerar los tiempos de provisión en entornos reales de producción (ISP / FTTH).
+## Estructura
 
----
-
-## 🖥️ Interfaz de la aplicación
-
-![Interfaz principal del Configurador Datacom DM986](docs/images/app_interface.PNG)
-
----
-
-
-## ✨ Características principales
-
-### 🔀 Selector de modelo
-- Selección manual del modelo de módem:
-  - DM986-416 AX30
-  - DM986-414
-- La interfaz adapta automáticamente las opciones WiFi según el modelo seleccionado.
-
----
-
-### 🌐 Configuración WAN automática
-- Creación y configuración de:
-  - **VLAN 500 (Internet)** – IPoE
-  - **VLAN 600 (TR-069 / Gestión remota)** – IPoE
-- Asignación automática de puertos.
-- DHCP habilitado correctamente en ambos enlaces.
-
----
-
-### 📶 Configuración WiFi avanzada
-- Configuración completa de:
-  - **WiFi 2.4GHz**
-  - **WiFi 5GHz**
-- Personalización opcional de:
-  - Channel Width
-  - Channel Number
-- Valores y opciones ajustadas automáticamente según el modelo:
-  - 416: soporte hasta 160 MHz
-  - 414: opciones compatibles reales del equipo
-- Potencia de transmisión configurada al **100%**.
-- Selección automática de canales cuando no se usan valores personalizados.
-
----
-
-### 🔐 Seguridad
-- Configuración de:
-  - Contraseña **WPA/WPA2** para WiFi
-  - Cambio de contraseña de **administrador**
-- Activación de **acceso remoto seguro (HTTPS)**.
-
----
-
-### 🛰️ Gestión remota (TR-069)
-- Configuración automática de:
-  - URL del ACS
-  - Credenciales de autenticación
-  - Parámetros de conexión remota
-- Aplicación inmediata de cambios.
-
----
-
-### 🧭 Interfaz gráfica
-- Interfaz moderna y clara:
-  - Selector de modelo
-  - Selector de navegador
-  - Campos guiados
-  - Barra de progreso y estado en tiempo real
-- Arquitectura unificada:
-  - `main.py` → UI + selector
-  - `logic_416.py` → lógica específica DM986-416
-  - `logic_414.py` → lógica específica DM986-414
-
----
-
-## 🧩 Arquitectura del proyecto
-
-```
-Script-DATACOM-DM986/
-│
+```text
+.
 ├── main.py
 ├── logic_416.py
 ├── logic_414.py
+├── logic_414Q.py
 ├── assets/
-│   └── icono.ico
+│   └── icons/
+│       └── icono.ico
+├── Configurador Datacom.spec
 ├── requirements.txt
-├── README.md
-└── .gitignore
+├── requirements-build.txt
+├── setup.bat
+├── run.bat
+├── build.bat
+├── clean.bat
+├── .gitignore
+└── README.md
 ```
 
----
+No se incluyen ni se versionan `venv/`, `build/`, `dist/`, `__pycache__/`, logs ni carpetas de backup.
 
-## 🔧 Requisitos
+## Preparar el proyecto por primera vez
 
-- Windows 10 / 11
-- Python 3.8+
-- Navegador instalado (Chrome recomendado)
+En Windows, desde la carpeta del proyecto:
 
----
+```bat
+setup.bat
+```
 
-## ▶️ Ejecución
+El script crea `venv`, actualiza pip e instala Selenium, webdriver-manager y PyInstaller.
 
-```bash
+> El proyecto está preparado para Python 3.13, que es la versión usada actualmente.
+
+## Ejecutar en desarrollo
+
+```bat
+run.bat
+```
+
+O manualmente:
+
+```powershell
+.\venv\Scripts\Activate.ps1
 python main.py
 ```
 
----
+## Compilar el EXE
 
-## 🛠️ Compilación (PyInstaller)
+La forma recomendada es:
 
-```bash
-python -m PyInstaller --onefile --noconsole --icon=assets/icons/icono.ico --hidden-import=webdriver_manager.chrome --hidden-import=webdriver_manager.microsoft --hidden-import=webdriver_manager.firefox --hidden-import=tkinter --name "Configurador Datacom" main.py
+```bat
+build.bat
 ```
 
----
+`build.bat`:
 
-## ⚠️ Consideraciones
+1. verifica que exista el entorno virtual;
+2. elimina `build/` y `dist/` anteriores;
+3. compila usando `Configurador Datacom.spec`;
+4. verifica que se haya creado el ejecutable.
 
-- Diseñado para Datacom DM986 en 192.168.0.1
-- Ejecutar conectado directamente al módem
-- Uso técnico / interno
+Resultado:
 
----
+```text
+dist\Configurador Datacom.exe
+```
 
-## 📞 Contacto
+Ya no es necesario copiar y pegar el comando largo de PyInstaller en PowerShell.
 
-**Luis Miraglio**  
-📧 miraglioluis1@gmail.com
+## Limpiar archivos generados
+
+```bat
+clean.bat
+```
+
+Elimina `build/`, `dist/` y cachés `__pycache__`.
+
+## Navegadores
+
+La aplicación soporta:
+
+- Google Chrome
+- Microsoft Edge
+- Mozilla Firefox
+- Autodetección
+
+Chrome es la opción recomendada.
+
+## Notas
+
+- El equipo debe ser accesible en `192.168.0.1`.
+- La PC debe estar conectada correctamente al equipo por LAN/Wi-Fi según el flujo de trabajo.
+- El proyecto no guarda backups automáticos ni logs técnicos en archivos locales.
+- El navegador queda abierto al finalizar para permitir una verificación visual cuando corresponda.

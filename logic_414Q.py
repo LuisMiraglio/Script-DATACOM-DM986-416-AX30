@@ -1,7 +1,6 @@
 # logica para configurar Datacom DM986-414 Q via Selenium
 import time
 import base64
-import traceback
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -66,15 +65,6 @@ class ConfiguradorModem414Q:
     # ============================================================
     # INICIO BLOQUE AGREGADO - HELPERS DE ERRORES
     # ============================================================
-    def _guardar_error_tecnico(self):
-        try:
-            with open("error_log.txt", "a", encoding="utf-8") as f:
-                f.write("\n" + "=" * 80 + "\n")
-                f.write(traceback.format_exc())
-                f.write("\n")
-        except Exception:
-            pass
-
     def _abrir_login_seguro(self, url: str):
         try:
             self.driver.get(url)
@@ -264,22 +254,18 @@ class ConfiguradorModem414Q:
         # ============================================================
         except ErrorInternetODriver as e:
             self._msgbox_error("Sin conexión a Internet", str(e))
-            self._guardar_error_tecnico()
             return False
 
         except ErrorConexionEquipo as e:
             self._msgbox_error("Error de conexión", str(e))
-            self._guardar_error_tecnico()
             return False
 
         except ErrorCredencialesEquipo as e:
             self._msgbox_error("Contraseña incorrecta", str(e))
-            self._guardar_error_tecnico()
             return False
 
         except ErrorConfiguracionAmigable as e:
             self._msgbox_error("Error durante la configuración", str(e))
-            self._guardar_error_tecnico()
             return False
         # ============================================================
         # FIN BLOQUE AGREGADO - CAPTURA DE ERRORES AMIGABLES
@@ -289,9 +275,8 @@ class ConfiguradorModem414Q:
             self._msgbox_error(
                 "Error durante la configuración (414 Q)",
                 "Ocurrió un error inesperado durante la configuración.\n\n"
-                "Se guardaron detalles técnicos en el archivo error_log.txt."
+                "La configuración fue detenida para evitar continuar con un equipo parcialmente configurado."
             )
-            self._guardar_error_tecnico()
             return False
 
         finally:

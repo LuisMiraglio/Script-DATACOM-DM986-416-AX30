@@ -1,27 +1,36 @@
-# Entorno virtual
+# Entornos virtuales
 venv/
 .venv/
+
+# Variables de entorno
 .env
 *.env
 
-# Build / distribución
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller / distribución
 build/
 dist/
-*.spec
 
-# Cachés de Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+# Logs y temporales
+*.log
+error_log.txt
+*.tmp
+*.bak
 
-# Logs
-logs/*
-!logs/.gitkeep
+# Backups (no se versionan)
+backup/
+backups/
+**/backup/
+**/backups/
 
-# Configs de IDE
+# IDE
 .vscode/
 .idea/
 
-# Archivos legacy / basura
-backup.txt
+# Sistema operativo
+Thumbs.db
+.DS_Store
