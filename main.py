@@ -1006,7 +1006,19 @@ class MainApp:
         ).pack(
             anchor="w",
             padx=18,
-            pady=(14, 8)
+            pady=(14, 4)
+        )
+
+        tk.Label(
+            frame,
+            text="✓ Verificado    ● Aplicado sin verificación    ⏳ En proceso    ○ Pendiente    ✕ Error",
+            bg=self.card_color,
+            fg=self.secondary_text,
+            font=self.small_font
+        ).pack(
+            anchor="w",
+            padx=18,
+            pady=(0, 8)
         )
 
         grid_frame = tk.Frame(
@@ -1286,6 +1298,9 @@ class MainApp:
         if (
             "configurando seguridad wifi 5ghz" in texto
         ):
+            if self.step_states.get("WiFi 5 GHz") == "running":
+                self._set_step_state("WiFi 5 GHz", "applied")
+
             self._set_step_state(
                 "Seguridad WiFi 5 GHz",
                 "running"
@@ -1305,7 +1320,11 @@ class MainApp:
         # ========================================================
         if (
             "configurando wifi 2.4ghz" in texto
+            or "configurando wlan 2.4ghz" in texto
         ):
+            if self.step_states.get("Seguridad WiFi 5 GHz") == "running":
+                self._set_step_state("Seguridad WiFi 5 GHz", "applied")
+
             self._set_step_state(
                 "WiFi 2.4 GHz",
                 "running"
@@ -1326,6 +1345,9 @@ class MainApp:
             "configurando seguridad wifi 2.4ghz"
             in texto
         ):
+            if self.step_states.get("WiFi 2.4 GHz") == "running":
+                self._set_step_state("WiFi 2.4 GHz", "applied")
+
             self._set_step_state(
                 "Seguridad WiFi 2.4 GHz",
                 "running"
@@ -1347,6 +1369,9 @@ class MainApp:
             "cambiando contraseña de administrador"
             in texto
         ):
+            if self.step_states.get("Seguridad WiFi 2.4 GHz") == "running":
+                self._set_step_state("Seguridad WiFi 2.4 GHz", "applied")
+
             self._set_step_state(
                 "Contraseña administrador",
                 "running"
@@ -1367,6 +1392,9 @@ class MainApp:
         if (
             "configurando tr-069" in texto
         ):
+            if self.step_states.get("Contraseña administrador") == "running":
+                self._set_step_state("Contraseña administrador", "applied")
+
             self._set_step_state(
                 "TR-069",
                 "running"
@@ -1387,6 +1415,9 @@ class MainApp:
         if (
             "configurando remote access" in texto
         ):
+            if self.step_states.get("TR-069") == "running":
+                self._set_step_state("TR-069", "applied")
+
             self._set_step_state(
                 "Remote Access HTTPS",
                 "running"
@@ -1400,6 +1431,19 @@ class MainApp:
                 "Remote Access HTTPS",
                 "success"
             )
+
+        # ========================================================
+        # FINALIZACIÓN SIN VERIFICACIÓN COMPLETA
+        # ========================================================
+        if (
+            "configuración dm986-414 completada" in texto
+            or "configuracion dm986-414 completada" in texto
+            or "configuración dm986-414 q completada" in texto
+            or "configuracion dm986-414 q completada" in texto
+        ):
+            for step in self.steps:
+                if self.step_states.get(step) == "running":
+                    self._set_step_state(step, "applied")
 
         # ========================================================
         # ERRORES
@@ -1448,6 +1492,13 @@ class MainApp:
 
             self.current_step_var.set(
                 step
+            )
+
+        elif state == "applied":
+
+            label.config(
+                text=f"●  {step}",
+                fg=self.warning_color
             )
 
         elif state == "success":
@@ -1870,10 +1921,16 @@ class MainApp:
     # ============================================================
     def _marcar_resultado_exitoso(self):
 
-        completados = sum(
+        verificados = sum(
             1
             for state in self.step_states.values()
             if state == "success"
+        )
+
+        aplicados = sum(
+            1
+            for state in self.step_states.values()
+            if state == "applied"
         )
 
         total = len(
@@ -1888,14 +1945,27 @@ class MainApp:
             "Proceso finalizado"
         )
 
-        self.result_var.set(
-            f"✅ EQUIPO CONFIGURADO CORRECTAMENTE · "
-            f"{completados}/{total} verificaciones"
-        )
+        if verificados == total:
 
-        self.result_label.config(
-            fg=self.success_color
-        )
+            self.result_var.set(
+                f"✅ EQUIPO CONFIGURADO Y VERIFICADO CORRECTAMENTE · "
+                f"{verificados}/{total} verificaciones"
+            )
+
+            self.result_label.config(
+                fg=self.success_color
+            )
+
+        else:
+
+            self.result_var.set(
+                f"⚠ CONFIGURACIÓN FINALIZADA · "
+                f"{verificados}/{total} verificaciones confirmadas"
+            )
+
+            self.result_label.config(
+                fg=self.warning_color
+            )
 
     # ============================================================
     # RESULTADO ERROR

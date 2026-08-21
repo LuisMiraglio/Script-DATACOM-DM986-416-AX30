@@ -12,7 +12,7 @@ from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.common.exceptions import TimeoutException, WebDriverException, UnexpectedAlertPresentException
 
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.microsoft import EdgeChromiumDriverManager
@@ -35,6 +35,10 @@ class ErrorConfiguracionAmigable(Exception):
 
 
 class ErrorInternetODriver(Exception):
+    pass
+
+
+class ErrorVerificacionConfiguracion(Exception):
     pass
 # ============================================================
 # FIN BLOQUE AGREGADO - MANEJO DE ERRORES AMIGABLES
@@ -134,6 +138,837 @@ class ConfiguradorModem414:
             ) from e
     # ============================================================
     # FIN BLOQUE AGREGADO - HELPERS DE ERRORES
+    # ============================================================
+
+    # ============================================================
+    # INICIO BLOQUE AGREGADO - VERIFICACIÓN VLAN 500 / VLAN 600
+    # ============================================================
+    def _abrir_wan(self, timeout=20):
+        d = self.driver
+        d.switch_to.default_content()
+
+        wan_btn = WebDriverWait(d, timeout).until(
+            EC.element_to_be_clickable((By.XPATH, "//a[@rel='4' and normalize-space()='WAN']"))
+        )
+        self._click_safe(wan_btn)
+
+        self._switch_to_content_iframe(timeout=timeout)
+
+        WebDriverWait(d, timeout).until(
+            EC.presence_of_element_located((By.NAME, "vid"))
+        )
+
+    def _leer_estado_wan_actual(self):
+        d = self.driver
+
+        vlan = d.find_element(By.NAME, "vlan")
+        vid = d.find_element(By.NAME, "vid")
+        adsl = d.find_element(By.NAME, "adslConnectionMode")
+        ctype = d.find_element(By.NAME, "ctype")
+        dhcp = d.find_element(
+            By.XPATH,
+            "//input[@type='radio' and @name='ipMode' and @value='1']"
+        )
+
+        return {
+            "vlan": vlan.is_selected(),
+            "vid": (vid.get_attribute("value") or "").strip(),
+            "adslConnectionMode": Select(adsl).first_selected_option.get_attribute("value"),
+            "ctype": Select(ctype).first_selected_option.get_attribute("value"),
+            "dhcp": dhcp.is_selected(),
+        }
+
+    def _esperar_wan_objetivo(self, vid_objetivo: str, ctype_objetivo: str, timeout=20):
+        def _estado_correcto(_driver):
+            try:
+                estado = self._leer_estado_wan_actual()
+                return (
+                    estado["vlan"] is True
+                    and estado["vid"] == str(vid_objetivo)
+                    and estado["adslConnectionMode"] == "1"
+                    and estado["ctype"] == str(ctype_objetivo)
+                    and estado["dhcp"] is True
+                )
+            except Exception:
+                return False
+
+        try:
+            WebDriverWait(self.driver, timeout).until(_estado_correcto)
+            return True
+        except TimeoutException:
+            return False
+
+    def _buscar_vlan_en_links(self, vid_objetivo: str, ctype_objetivo: str, timeout=20):
+        d = self.driver
+
+        try:
+            lkname = WebDriverWait(d, timeout).until(
+                EC.presence_of_element_located((By.NAME, "lkname"))
+            )
+        except TimeoutException:
+            return False
+
+        valores = [
+            opt.get_attribute("value")
+            for opt in lkname.find_elements(By.TAG_NAME, "option")
+        ]
+
+        for valor in valores:
+            if not valor or valor == "new":
+                continue
+
+            try:
+                lkname = WebDriverWait(d, timeout).until(
+                    EC.presence_of_element_located((By.NAME, "lkname"))
+                )
+                Select(lkname).select_by_value(valor)
+
+                if self._esperar_wan_objetivo(
+                    vid_objetivo,
+                    ctype_objetivo,
+                    timeout=3
+                ):
+                    return True
+            except Exception:
+                continue
+
+        return False
+
+    def _detectar_alerta_vlan(self, vid_objetivo: str, timeout=2):
+        try:
+            WebDriverWait(self.driver, timeout).until(EC.alert_is_present())
+        except TimeoutException:
+            return
+
+        try:
+            alerta = self.driver.switch_to.alert
+            texto_alerta = (alerta.text or "").strip()
+            alerta.accept()
+        except Exception:
+            texto_alerta = "El equipo rechazó la configuración."
+
+        self._status(f"❌ VLAN {vid_objetivo} no pudo aplicarse correctamente.")
+
+        raise ErrorVerificacionConfiguracion(
+            f"La VLAN {vid_objetivo} no pudo aplicarse correctamente.\n\n"
+            f"El equipo informó: {texto_alerta}\n\n"
+            "La configuración fue detenida para evitar continuar con un equipo "
+            "parcialmente configurado."
+        )
+
+    def _verificar_vlan_persistida(self, vid_objetivo: str, ctype_objetivo: str):
+        self._status(f"Verificando VLAN {vid_objetivo}...")
+
+        self._detectar_alerta_vlan(vid_objetivo, timeout=2)
+
+        try:
+            self._abrir_wan(timeout=20)
+        except UnexpectedAlertPresentException:
+            self._detectar_alerta_vlan(vid_objetivo, timeout=2)
+            raise ErrorVerificacionConfiguracion(
+                f"La VLAN {vid_objetivo} no pudo verificarse correctamente."
+            )
+
+        if self._esperar_wan_objetivo(
+            vid_objetivo,
+            ctype_objetivo,
+            timeout=5
+        ):
+            self._status(f"✅ VLAN {vid_objetivo} configurada y verificada.")
+            return
+
+        if self._buscar_vlan_en_links(
+            vid_objetivo,
+            ctype_objetivo,
+            timeout=15
+        ):
+            self._status(f"✅ VLAN {vid_objetivo} configurada y verificada.")
+            return
+
+        self._status(f"❌ VLAN {vid_objetivo} no quedó guardada correctamente.")
+
+        raise ErrorVerificacionConfiguracion(
+            f"La VLAN {vid_objetivo} no quedó guardada correctamente.\n\n"
+            "La configuración fue detenida para evitar continuar con un equipo "
+            "parcialmente configurado."
+        )
+    # ============================================================
+    # FIN BLOQUE AGREGADO - VERIFICACIÓN VLAN 500 / VLAN 600
+    # ============================================================
+
+    # ============================================================
+    # INICIO BLOQUE AGREGADO - VERIFICACIÓN WIFI 5 GHZ
+    # ============================================================
+    def _abrir_wlan_5ghz(self, timeout=20):
+        d = self.driver
+        d.switch_to.default_content()
+
+        wlan_btn = WebDriverWait(d, timeout).until(
+            EC.element_to_be_clickable((By.XPATH, "//*[@id='nav']/li[3]/a"))
+        )
+        self._click_safe(wlan_btn)
+
+        self._switch_to_content_iframe(timeout=timeout)
+
+        WebDriverWait(d, timeout).until(
+            EC.presence_of_element_located((By.NAME, "ssid"))
+        )
+
+    def _leer_estado_wlan_5ghz(self):
+        d = self.driver
+
+        ssid = d.find_element(By.NAME, "ssid")
+        chanwid = d.find_element(By.NAME, "chanwid")
+        chan = d.find_element(By.NAME, "chan")
+
+        estado = {
+            "ssid": (ssid.get_attribute("value") or "").strip(),
+            "chanwid": Select(chanwid).first_selected_option.get_attribute("value"),
+            "chan": Select(chan).first_selected_option.get_attribute("value"),
+            "txpower": None,
+        }
+
+        txpower = d.find_elements(By.NAME, "txpower")
+        if txpower:
+            estado["txpower"] = Select(txpower[0]).first_selected_option.get_attribute("value")
+
+        return estado
+
+    def _detectar_alerta_wifi(self, nombre_bloque: str, timeout=2):
+        try:
+            WebDriverWait(self.driver, timeout).until(EC.alert_is_present())
+        except TimeoutException:
+            return
+
+        try:
+            alerta = self.driver.switch_to.alert
+            texto_alerta = (alerta.text or "").strip()
+            alerta.accept()
+        except Exception:
+            texto_alerta = "El equipo rechazó la configuración."
+
+        self._status(f"❌ {nombre_bloque} no pudo aplicarse correctamente.")
+
+        raise ErrorVerificacionConfiguracion(
+            f"{nombre_bloque} no pudo aplicarse correctamente.\n\n"
+            f"El equipo informó: {texto_alerta}\n\n"
+            "La configuración fue detenida para evitar continuar con un equipo "
+            "parcialmente configurado."
+        )
+
+    def _verificar_wifi_5ghz_persistido(
+        self,
+        ssid_objetivo: str,
+        chanwid_objetivo: str,
+        chan_objetivo: str
+    ):
+        self._status("Verificando WiFi 5 GHz...")
+
+        self._detectar_alerta_wifi("WiFi 5 GHz", timeout=2)
+
+        try:
+            self._abrir_wlan_5ghz(timeout=20)
+        except UnexpectedAlertPresentException:
+            self._detectar_alerta_wifi("WiFi 5 GHz", timeout=2)
+            raise ErrorVerificacionConfiguracion(
+                "WiFi 5 GHz no pudo verificarse correctamente."
+            )
+
+        estado = self._leer_estado_wlan_5ghz()
+
+        txpower_ok = (
+            estado["txpower"] is None
+            or estado["txpower"] == "0"
+        )
+
+        if not (
+            estado["ssid"] == ssid_objetivo
+            and estado["chanwid"] == str(chanwid_objetivo)
+            and estado["chan"] == str(chan_objetivo)
+            and txpower_ok
+        ):
+            self._status("❌ WiFi 5 GHz no quedó guardado correctamente.")
+
+            raise ErrorVerificacionConfiguracion(
+                "La configuración WiFi 5 GHz no quedó guardada correctamente.\n\n"
+                "Valores detectados:\n"
+                f"- SSID: {estado['ssid']}\n"
+                f"- Channel Width: {estado['chanwid']}\n"
+                f"- Channel: {estado['chan']}\n"
+                f"- TX Power: {estado['txpower'] if estado['txpower'] is not None else 'No disponible'}\n\n"
+                "Valores esperados:\n"
+                f"- SSID: {ssid_objetivo}\n"
+                f"- Channel Width: {chanwid_objetivo}\n"
+                f"- Channel: {chan_objetivo}\n"
+                "- TX Power: 0\n\n"
+                "La configuración fue detenida para evitar continuar con un equipo "
+                "parcialmente configurado."
+            )
+
+        self._status("✅ WiFi 5 GHz configurado y verificado.")
+    # ============================================================
+    # FIN BLOQUE AGREGADO - VERIFICACIÓN WIFI 5 GHZ
+    # ============================================================
+
+    # ============================================================
+    # INICIO BLOQUE AGREGADO - VERIFICACIÓN SEGURIDAD WIFI 5 GHZ
+    # ============================================================
+    def _abrir_seguridad_5ghz(self, timeout=20):
+        d = self.driver
+        d.switch_to.default_content()
+
+        sec5 = WebDriverWait(d, timeout).until(
+            EC.element_to_be_clickable((
+                By.XPATH,
+                "//a[@target='contentIframe' and contains(@href,'wlwpa.asp') and contains(@href,'wlan_idx=0')]"
+            ))
+        )
+        self._click_safe(sec5)
+
+        self._switch_to_content_iframe(timeout=timeout)
+
+        WebDriverWait(d, timeout).until(
+            EC.presence_of_element_located((By.NAME, "security_method"))
+        )
+
+    def _verificar_seguridad_5ghz_persistida(self):
+        self._status("Verificando seguridad WiFi 5 GHz...")
+
+        self._detectar_alerta_wifi("Seguridad WiFi 5 GHz", timeout=2)
+
+        try:
+            self._abrir_seguridad_5ghz(timeout=20)
+        except UnexpectedAlertPresentException:
+            self._detectar_alerta_wifi("Seguridad WiFi 5 GHz", timeout=2)
+            raise ErrorVerificacionConfiguracion(
+                "La seguridad WiFi 5 GHz no pudo verificarse correctamente."
+            )
+
+        sec_method = self.driver.find_element(By.NAME, "security_method")
+        valor = Select(sec_method).first_selected_option.get_attribute("value")
+
+        if valor != "6":
+            self._status("❌ Seguridad WiFi 5 GHz no quedó guardada correctamente.")
+
+            raise ErrorVerificacionConfiguracion(
+                "La seguridad WiFi 5 GHz no quedó guardada correctamente.\n\n"
+                f"Valor detectado: {valor}\n"
+                "Valor esperado: 6\n\n"
+                "La configuración fue detenida para evitar continuar con un equipo "
+                "parcialmente configurado."
+            )
+
+        self._status("✅ Seguridad WiFi 5 GHz configurada y verificada.")
+    # ============================================================
+    # FIN BLOQUE AGREGADO - VERIFICACIÓN SEGURIDAD WIFI 5 GHZ
+    # ============================================================
+
+    # ============================================================
+    # INICIO BLOQUE AGREGADO - VERIFICACIÓN WIFI 2.4 GHZ
+    # ============================================================
+    def _abrir_wlan_24ghz(self, timeout=20):
+        d = self.driver
+        d.switch_to.default_content()
+
+        wlan1_link = WebDriverWait(d, timeout).until(
+            EC.element_to_be_clickable((
+                By.XPATH,
+                "/html/body/div[3]/div[2]/div[1]/div[1]/div/ul/li[2]/h3/a"
+            ))
+        )
+        self._click_safe(wlan1_link)
+
+        self._switch_to_content_iframe(timeout=timeout)
+
+        WebDriverWait(d, timeout).until(
+            EC.presence_of_element_located((By.NAME, "ssid"))
+        )
+
+    def _leer_estado_wlan_24ghz(self):
+        d = self.driver
+
+        ssid = d.find_element(By.NAME, "ssid")
+        chanwid = d.find_element(By.NAME, "chanwid")
+        chan = d.find_element(By.NAME, "chan")
+
+        estado = {
+            "ssid": (ssid.get_attribute("value") or "").strip(),
+            "chanwid": Select(chanwid).first_selected_option.get_attribute("value"),
+            "chan": Select(chan).first_selected_option.get_attribute("value"),
+            "txpower": None,
+        }
+
+        txpower = d.find_elements(By.NAME, "txpower")
+        if txpower:
+            estado["txpower"] = Select(txpower[0]).first_selected_option.get_attribute("value")
+
+        return estado
+
+    def _verificar_wifi_24ghz_persistido(
+        self,
+        ssid_objetivo: str,
+        chanwid_objetivo: str,
+        chan_objetivo: str
+    ):
+        self._status("Verificando WiFi 2.4 GHz...")
+
+        self._detectar_alerta_wifi("WiFi 2.4 GHz", timeout=2)
+
+        try:
+            self._abrir_wlan_24ghz(timeout=20)
+        except UnexpectedAlertPresentException:
+            self._detectar_alerta_wifi("WiFi 2.4 GHz", timeout=2)
+            raise ErrorVerificacionConfiguracion(
+                "WiFi 2.4 GHz no pudo verificarse correctamente."
+            )
+
+        estado = self._leer_estado_wlan_24ghz()
+
+        txpower_ok = (
+            estado["txpower"] is None
+            or estado["txpower"] == "0"
+        )
+
+        if not (
+            estado["ssid"] == ssid_objetivo
+            and estado["chanwid"] == str(chanwid_objetivo)
+            and estado["chan"] == str(chan_objetivo)
+            and txpower_ok
+        ):
+            self._status("❌ WiFi 2.4 GHz no quedó guardado correctamente.")
+
+            raise ErrorVerificacionConfiguracion(
+                "La configuración WiFi 2.4 GHz no quedó guardada correctamente.\n\n"
+                "Valores detectados:\n"
+                f"- SSID: {estado['ssid']}\n"
+                f"- Channel Width: {estado['chanwid']}\n"
+                f"- Channel: {estado['chan']}\n"
+                f"- TX Power: {estado['txpower'] if estado['txpower'] is not None else 'No disponible'}\n\n"
+                "Valores esperados:\n"
+                f"- SSID: {ssid_objetivo}\n"
+                f"- Channel Width: {chanwid_objetivo}\n"
+                f"- Channel: {chan_objetivo}\n"
+                "- TX Power: 0\n\n"
+                "La configuración fue detenida para evitar continuar con un equipo "
+                "parcialmente configurado."
+            )
+
+        self._status("✅ WiFi 2.4 GHz configurado y verificado.")
+    # ============================================================
+    # FIN BLOQUE AGREGADO - VERIFICACIÓN WIFI 2.4 GHZ
+    # ============================================================
+
+    # ============================================================
+    # INICIO BLOQUE AGREGADO - VERIFICACIÓN SEGURIDAD WIFI 2.4 GHZ
+    # ============================================================
+    def _abrir_seguridad_24ghz(self, timeout=20):
+        d = self.driver
+        d.switch_to.default_content()
+
+        sec24 = WebDriverWait(d, timeout).until(
+            EC.element_to_be_clickable((
+                By.XPATH,
+                "//a[@target='contentIframe' and contains(@href,'wlwpa.asp') and contains(@href,'wlan_idx=1')]"
+            ))
+        )
+        self._click_safe(sec24)
+
+        self._switch_to_content_iframe(timeout=timeout)
+
+        WebDriverWait(d, timeout).until(
+            EC.presence_of_element_located((By.NAME, "security_method"))
+        )
+
+    def _verificar_seguridad_24ghz_persistida(self):
+        self._status("Verificando seguridad WiFi 2.4 GHz...")
+
+        self._detectar_alerta_wifi("Seguridad WiFi 2.4 GHz", timeout=2)
+
+        try:
+            self._abrir_seguridad_24ghz(timeout=20)
+        except UnexpectedAlertPresentException:
+            self._detectar_alerta_wifi("Seguridad WiFi 2.4 GHz", timeout=2)
+            raise ErrorVerificacionConfiguracion(
+                "La seguridad WiFi 2.4 GHz no pudo verificarse correctamente."
+            )
+
+        sec_method = self.driver.find_element(By.NAME, "security_method")
+        valor = Select(sec_method).first_selected_option.get_attribute("value")
+
+        if valor != "6":
+            self._status("❌ Seguridad WiFi 2.4 GHz no quedó guardada correctamente.")
+
+            raise ErrorVerificacionConfiguracion(
+                "La seguridad WiFi 2.4 GHz no quedó guardada correctamente.\n\n"
+                f"Valor detectado: {valor}\n"
+                "Valor esperado: 6\n\n"
+                "La configuración fue detenida para evitar continuar con un equipo "
+                "parcialmente configurado."
+            )
+
+        self._status("✅ Seguridad WiFi 2.4 GHz configurada y verificada.")
+    # ============================================================
+    # FIN BLOQUE AGREGADO - VERIFICACIÓN SEGURIDAD WIFI 2.4 GHZ
+    # ============================================================
+
+    # ============================================================
+    # INICIO BLOQUE AGREGADO - VERIFICACIÓN PASSWORD ADMIN
+    # ============================================================
+    def _verificar_cambio_password(self, timeout=15):
+        d = self.driver
+
+        self._status("Verificando cambio de contraseña de administrador...")
+
+        try:
+            d.switch_to.default_content()
+        except Exception:
+            pass
+
+        try:
+            self._switch_to_content_iframe(timeout=timeout)
+        except Exception:
+            pass
+
+        texto_exito = "Change setting successfully!"
+
+        try:
+            WebDriverWait(d, timeout).until(
+                lambda _d: (
+                    texto_exito.lower() in _d.page_source.lower()
+                    or "password has already been used" in _d.page_source.lower()
+                )
+            )
+        except TimeoutException:
+            self._status("❌ No se pudo confirmar el cambio de contraseña.")
+
+            raise ErrorVerificacionConfiguracion(
+                "No se recibió una confirmación válida del equipo después de cambiar "
+                "la contraseña de administrador.\n\n"
+                "La configuración fue detenida para evitar continuar con un equipo "
+                "parcialmente configurado."
+            )
+
+        contenido = d.page_source.lower()
+
+        if texto_exito.lower() in contenido:
+            self._status("✅ Contraseña de administrador cambiada y verificada.")
+            return
+
+        if "password has already been used" in contenido:
+            mensaje_equipo = "The password has already been used"
+        else:
+            mensaje_equipo = "El equipo rechazó el cambio de contraseña."
+
+        self._status("❌ El equipo rechazó el cambio de contraseña de administrador.")
+
+        raise ErrorVerificacionConfiguracion(
+            "La contraseña de administrador no pudo cambiarse correctamente.\n\n"
+            f"El equipo informó: {mensaje_equipo}\n\n"
+            "La configuración fue detenida para evitar continuar con un equipo "
+            "parcialmente configurado."
+        )
+    # ============================================================
+    # FIN BLOQUE AGREGADO - VERIFICACIÓN PASSWORD ADMIN
+    # ============================================================
+
+    # ============================================================
+    # INICIO BLOQUE AGREGADO - VERIFICACIÓN TR-069
+    # ============================================================
+    def _abrir_tr069(self, timeout=20):
+        d = self.driver
+        d.switch_to.default_content()
+
+        admin_tab = WebDriverWait(d, timeout).until(
+            EC.element_to_be_clickable(
+                (
+                    By.XPATH,
+                    "//ul[@id='nav']//a[@href='javascript:void(0)' and @rel='9' and normalize-space()='Admin']"
+                )
+            )
+        )
+        self._click_safe(admin_tab)
+
+        side_menu = WebDriverWait(d, timeout).until(
+            EC.presence_of_element_located((By.ID, "side"))
+        )
+
+        tr069_link = WebDriverWait(side_menu, timeout).until(
+            EC.element_to_be_clickable(
+                (
+                    By.XPATH,
+                    ".//a[@target='contentIframe' and contains(@href,'tr069config.asp')]"
+                )
+            )
+        )
+
+        try:
+            d.execute_script(
+                "arguments[0].scrollIntoView({block:'center'});",
+                tr069_link
+            )
+        except Exception:
+            pass
+
+        self._click_safe(tr069_link)
+
+        self._switch_to_content_iframe(timeout=timeout)
+
+        WebDriverWait(d, timeout).until(
+            EC.presence_of_element_located((By.NAME, "url"))
+        )
+
+    def _leer_estado_tr069(self):
+        d = self.driver
+
+        def _valor(name):
+            try:
+                el = d.find_element(By.NAME, name)
+                return (el.get_attribute("value") or "").strip()
+            except Exception:
+                return None
+
+        return {
+            "url": _valor("url"),
+            "username": _valor("username"),
+            "password": _valor("password"),
+            "conreqname": _valor("conreqname"),
+            "conreqpw": _valor("conreqpw"),
+        }
+
+    def _password_tr069_verificable(self, valor: str):
+        if valor is None:
+            return False
+
+        valor = valor.strip()
+
+        if not valor:
+            return False
+
+        caracteres_mascara = set("*•●.")
+        if set(valor).issubset(caracteres_mascara):
+            return False
+
+        return True
+
+    def _procesar_alerta_tr069(self, timeout=2):
+        d = self.driver
+
+        try:
+            WebDriverWait(d, timeout).until(EC.alert_is_present())
+        except TimeoutException:
+            return
+
+        try:
+            alerta = d.switch_to.alert
+            texto = (alerta.text or "").strip()
+            alerta.accept()
+        except Exception:
+            texto = ""
+
+        if texto:
+            texto_lower = texto.lower()
+
+            indicadores_error = (
+                "error",
+                "fail",
+                "failed",
+                "invalid",
+                "incorrect",
+                "empty",
+                "wrong",
+            )
+
+            if any(indicador in texto_lower for indicador in indicadores_error):
+                self._status("❌ El equipo rechazó la configuración TR-069.")
+
+                raise ErrorVerificacionConfiguracion(
+                    "La configuración TR-069 no pudo aplicarse correctamente.\n\n"
+                    f"El equipo informó: {texto}\n\n"
+                    "La configuración fue detenida para evitar continuar con un equipo "
+                    "parcialmente configurado."
+                )
+
+    def _verificar_tr069_persistido(self):
+        self._status("Verificando TR-069...")
+
+        self._procesar_alerta_tr069(timeout=2)
+
+        try:
+            self._abrir_tr069(timeout=20)
+        except UnexpectedAlertPresentException:
+            self._procesar_alerta_tr069(timeout=2)
+
+            self._status("❌ TR-069 no pudo verificarse.")
+
+            raise ErrorVerificacionConfiguracion(
+                "La configuración TR-069 no pudo verificarse correctamente.\n\n"
+                "La configuración fue detenida para evitar continuar con un equipo "
+                "parcialmente configurado."
+            )
+
+        estado = self._leer_estado_tr069()
+
+        errores = []
+
+        if estado["url"] != "http://172.22.16.109:7995/":
+            errores.append(
+                f"URL ACS detectada: {estado['url']!r}"
+            )
+
+        if estado["username"] != "admin":
+            errores.append(
+                f"Username detectado: {estado['username']!r}"
+            )
+
+        if estado["conreqname"] != "admin":
+            errores.append(
+                f"Connection Request Username detectado: {estado['conreqname']!r}"
+            )
+
+        password_verificada = False
+        conreqpw_verificada = False
+
+        if self._password_tr069_verificable(estado["password"]):
+            password_verificada = True
+            if estado["password"] != "admin":
+                errores.append("Password TR-069 no coincide con el valor esperado.")
+
+        if self._password_tr069_verificable(estado["conreqpw"]):
+            conreqpw_verificada = True
+            if estado["conreqpw"] != "admin":
+                errores.append(
+                    "Connection Request Password no coincide con el valor esperado."
+                )
+
+        if errores:
+            self._status("❌ TR-069 no quedó guardado correctamente.")
+
+            raise ErrorVerificacionConfiguracion(
+                "La configuración TR-069 no quedó guardada correctamente.\n\n"
+                + "\n".join(f"- {error}" for error in errores)
+                + "\n\nLa configuración fue detenida para evitar continuar con un equipo "
+                  "parcialmente configurado."
+            )
+
+        if password_verificada and conreqpw_verificada:
+            self._status("✅ TR-069 configurado y verificado completamente.")
+        else:
+            self._status("✅ TR-069 configurado y verificado en todos los campos visibles.")
+    # ============================================================
+    # FIN BLOQUE AGREGADO - VERIFICACIÓN TR-069
+    # ============================================================
+
+    # ============================================================
+    # INICIO BLOQUE AGREGADO - VERIFICACIÓN REMOTE ACCESS HTTPS
+    # ============================================================
+    def _abrir_remote_access(self, timeout=20):
+        d = self.driver
+        d.switch_to.default_content()
+
+        nav_menu = WebDriverWait(d, timeout).until(
+            EC.presence_of_element_located((By.ID, "nav"))
+        )
+
+        advance_tab = WebDriverWait(nav_menu, timeout).until(
+            EC.element_to_be_clickable(
+                (
+                    By.XPATH,
+                    ".//a[@href='javascript:void(0)' and @rel='7' and normalize-space()='Advance']"
+                )
+            )
+        )
+        self._click_safe(advance_tab)
+
+        side_menu = WebDriverWait(d, timeout).until(
+            EC.presence_of_element_located((By.ID, "side"))
+        )
+
+        remote_link = WebDriverWait(side_menu, timeout).until(
+            EC.element_to_be_clickable(
+                (
+                    By.XPATH,
+                    ".//a[@target='contentIframe' and @href='rmtacc.asp' and normalize-space()='Remote Access']"
+                )
+            )
+        )
+        self._click_safe(remote_link)
+
+        self._switch_to_content_iframe(timeout=timeout)
+
+        WebDriverWait(d, timeout).until(
+            EC.presence_of_element_located((By.NAME, "w_https"))
+        )
+
+    def _procesar_alerta_remote_access(self, timeout=2):
+        d = self.driver
+
+        try:
+            WebDriverWait(d, timeout).until(EC.alert_is_present())
+        except TimeoutException:
+            return
+
+        try:
+            alerta = d.switch_to.alert
+            texto = (alerta.text or "").strip()
+            alerta.accept()
+        except Exception:
+            texto = ""
+
+        if texto:
+            texto_lower = texto.lower()
+
+            indicadores_error = (
+                "error",
+                "fail",
+                "failed",
+                "invalid",
+                "incorrect",
+                "empty",
+                "wrong",
+            )
+
+            if any(indicador in texto_lower for indicador in indicadores_error):
+                self._status("❌ El equipo rechazó la configuración de Remote Access.")
+
+                raise ErrorVerificacionConfiguracion(
+                    "Remote Access HTTPS no pudo aplicarse correctamente.\n\n"
+                    f"El equipo informó: {texto}\n\n"
+                    "La configuración fue detenida."
+                )
+
+    def _verificar_remote_access_https(self):
+        self._status("Verificando Remote Access HTTPS...")
+
+        self._procesar_alerta_remote_access(timeout=2)
+
+        try:
+            self._abrir_remote_access(timeout=20)
+        except UnexpectedAlertPresentException:
+            self._procesar_alerta_remote_access(timeout=2)
+
+            self._status("❌ Remote Access HTTPS no pudo verificarse.")
+
+            raise ErrorVerificacionConfiguracion(
+                "Remote Access HTTPS no pudo verificarse correctamente.\n\n"
+                "La configuración fue detenida."
+            )
+
+        https_checkbox = WebDriverWait(self.driver, 15).until(
+            EC.presence_of_element_located((By.NAME, "w_https"))
+        )
+
+        if not https_checkbox.is_selected():
+            self._status("❌ Remote Access HTTPS no quedó habilitado.")
+
+            raise ErrorVerificacionConfiguracion(
+                "Remote Access HTTPS no quedó guardado correctamente.\n\n"
+                "El equipo volvió a mostrar la opción HTTPS deshabilitada.\n\n"
+                "La configuración fue detenida."
+            )
+
+        self._status("✅ Remote Access HTTPS configurado y verificado.")
+    # ============================================================
+    # FIN BLOQUE AGREGADO - VERIFICACIÓN REMOTE ACCESS HTTPS
     # ============================================================
 
     # =========================
@@ -278,6 +1113,10 @@ class ConfiguradorModem414:
         except ErrorConfiguracionAmigable as e:
             self._msgbox_error("Error durante la configuración", str(e))
             return False
+
+        except ErrorVerificacionConfiguracion as e:
+            self._msgbox_error("Configuración incompleta", str(e))
+            return False
         # ============================================================
         # FIN BLOQUE AGREGADO - CAPTURA DE ERRORES AMIGABLES
         # ============================================================
@@ -406,7 +1245,11 @@ class ConfiguradorModem414:
 
         apply_500 = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit' and @name='apply' and @value='Apply Changes']")))
         self._click_safe(apply_500)
-        time.sleep(4)
+
+        self._verificar_vlan_persistida(
+            vid_objetivo="500",
+            ctype_objetivo="2"
+        )
 
         # =========================
         # WAN - VLAN 600 NEW LINK (TR069)
@@ -473,7 +1316,11 @@ class ConfiguradorModem414:
 
         apply_600 = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit' and @name='apply' and @value='Apply Changes']")))
         self._click_safe(apply_600)
-        time.sleep(4)
+
+        self._verificar_vlan_persistida(
+            vid_objetivo="600",
+            ctype_objetivo="1"
+        )
 
         # =========================
         # WLAN 5GHz
@@ -502,7 +1349,12 @@ class ConfiguradorModem414:
 
         apply_w5 = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit' and @name='save' and @value='Apply Changes']")))
         self._click_safe(apply_w5)
-        time.sleep(4)
+
+        self._verificar_wifi_5ghz_persistido(
+            ssid_objetivo=ssid_name,
+            chanwid_objetivo=extra["chanwid_5"],
+            chan_objetivo=extra["chan_5"]
+        )
 
         # =========================
         # Seguridad 5GHz
@@ -528,7 +1380,8 @@ class ConfiguradorModem414:
 
         apply_sec5 = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit' and @name='save' and @value='Apply Changes']")))
         self._click_safe(apply_sec5)
-        time.sleep(4)
+
+        self._verificar_seguridad_5ghz_persistida()
 
         # =========================
         # WLAN 2.4GHz
@@ -555,7 +1408,12 @@ class ConfiguradorModem414:
 
         apply_w24 = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit' and @name='save' and @value='Apply Changes']")))
         self._click_safe(apply_w24)
-        time.sleep(4)
+
+        self._verificar_wifi_24ghz_persistido(
+            ssid_objetivo=ssid_name,
+            chanwid_objetivo=extra["chanwid_24"],
+            chan_objetivo=extra["chan_24"]
+        )
 
         # =========================
         # Seguridad 2.4GHz
@@ -580,7 +1438,8 @@ class ConfiguradorModem414:
 
         apply_sec24 = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit' and @name='save' and @value='Apply Changes']")))
         self._click_safe(apply_sec24)
-        time.sleep(4)
+
+        self._verificar_seguridad_24ghz_persistida()
 
         # =========================
         # Admin -> Password
@@ -610,7 +1469,8 @@ class ConfiguradorModem414:
 
         apply_pass = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit' and @name='save' and @value='Apply Changes']")))
         self._click_safe(apply_pass)
-        time.sleep(4)
+
+        self._verificar_cambio_password(timeout=15)
 
         # =========================
         # Admin -> TR-069
@@ -642,21 +1502,28 @@ class ConfiguradorModem414:
         url = wait.until(EC.presence_of_element_located((By.NAME, "url")))
         url.clear()
         url.send_keys("http://172.22.16.109:7995/")
-        time.sleep(0.6)
 
-        u = d.find_element(By.NAME, "username")
+        u = WebDriverWait(d, 15).until(
+            EC.presence_of_element_located((By.NAME, "username"))
+        )
         u.clear()
         u.send_keys("admin")
 
-        p = d.find_element(By.NAME, "password")
+        p = WebDriverWait(d, 15).until(
+            EC.presence_of_element_located((By.NAME, "password"))
+        )
         p.clear()
         p.send_keys("admin")
 
-        crn = d.find_element(By.NAME, "conreqname")
+        crn = WebDriverWait(d, 15).until(
+            EC.presence_of_element_located((By.NAME, "conreqname"))
+        )
         crn.clear()
         crn.send_keys("admin")
 
-        crp = d.find_element(By.NAME, "conreqpw")
+        crp = WebDriverWait(d, 15).until(
+            EC.presence_of_element_located((By.NAME, "conreqpw"))
+        )
         crp.clear()
         crp.send_keys("admin")
 
@@ -665,13 +1532,8 @@ class ConfiguradorModem414:
             "//input[@type='submit' and @name='save' and (@value='Apply' or @value='Apply Changes')]"
         )))
         self._click_safe(apply_tr)
-        time.sleep(3)
 
-        try:
-            WebDriverWait(d, 3).until(EC.alert_is_present())
-            d.switch_to.alert.accept()
-        except Exception:
-            pass
+        self._verificar_tr069_persistido()
 
         # =========================
         # Advance -> Remote Access
@@ -679,19 +1541,45 @@ class ConfiguradorModem414:
         self._status("Configurando Remote Access (HTTPS)...")
         d.switch_to.default_content()
 
-        advance = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[@href='javascript:void(0)' and @rel='7']")))
+        advance = wait.until(
+            EC.element_to_be_clickable(
+                (By.XPATH, "//a[@href='javascript:void(0)' and @rel='7']")
+            )
+        )
         self._click_safe(advance)
 
-        remote = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[@target='contentIframe' and @href='rmtacc.asp']")))
+        remote = wait.until(
+            EC.element_to_be_clickable(
+                (By.XPATH, "//a[@target='contentIframe' and @href='rmtacc.asp']")
+            )
+        )
         self._click_safe(remote)
 
         self._switch_to_content_iframe(timeout=20)
 
-        https = wait.until(EC.element_to_be_clickable((By.NAME, "w_https")))
+        https = wait.until(
+            EC.element_to_be_clickable((By.NAME, "w_https"))
+        )
+
         if not https.is_selected():
             self._click_safe(https)
 
-        apply_remote = wait.until(EC.element_to_be_clickable((By.XPATH, "//input[@type='submit' and @name='set' and @value='Apply Changes']")))
+        WebDriverWait(d, 10).until(
+            lambda _d: _d.find_element(By.NAME, "w_https").is_selected()
+        )
+
+        apply_remote = wait.until(
+            EC.element_to_be_clickable(
+                (
+                    By.XPATH,
+                    "//input[@type='submit' and @name='set' and @value='Apply Changes']"
+                )
+            )
+        )
         self._click_safe(apply_remote)
 
-        self._status("Listo. El modem 414 debería quedar configurado.")
+        self._verificar_remote_access_https()
+
+        self._status(
+            "✅ Todas las configuraciones del DM986-414 fueron aplicadas y verificadas."
+        )
